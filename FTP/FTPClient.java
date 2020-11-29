@@ -1,10 +1,11 @@
 package FTP;
 
 
+import java.io.IOException;
 import java.util.Scanner;
 
 public class FTPClient {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         int port = 2020;
         int dataPort = 2021;
         String serverHost = "127.0.0.1";
@@ -58,16 +59,11 @@ public class FTPClient {
             }else if(cmd.contains("TEST") && cmd.length() > 4) {
                 cmds = cmd.split(" ");
             }else if(cmd.contains("DPUT") && cmd.length() > 4) {
-            cmds = cmd.split(" ");
-        }
+                cmds = cmd.split(" ");
+            }
 
 
             switch (cmds[0]) {
-                case "TEST":
-                    ftpClient.data();
-                case "DPUT":
-                    ftpClient.dataPut(cmds[1]);
-                    break;
                 case "GET":
                     if(cmds[1] == null)
                         cmds[1] = ".";
@@ -90,7 +86,7 @@ public class FTPClient {
                     else ftpClient.CD(cmds[1]);
                     break;
                 default:
-                   
+
             }
         }
     }
