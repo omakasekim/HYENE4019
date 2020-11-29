@@ -1,9 +1,9 @@
 package FTP;
 
-import javax.swing.*;
 import java.io.*;
 import java.net.*;
 import java.nio.*;
+import java.nio.file.Paths;
 import java.util.*;
 
 public class Client {
@@ -15,12 +15,8 @@ public class Client {
     private int dataPort;
     private InputStream inputStream;
     private OutputStream outputStream;
+    private String curDir;
 
-    //for data
-    private ServerSocket dataSocket;
-    private Socket dataConnection;
-    private OutputStream dataOutputStream;
-    private InputStream dataInputStream;
 
 
     public Client() {
@@ -31,6 +27,7 @@ public class Client {
         this.ipAddress = serverIP;
         this.serverPort = serverPort;
         this.dataPort = dataPort;
+        this.curDir =  System.getProperty("user.dir");
 
         try {
             socket = new Socket(this.ipAddress, this.serverPort);
@@ -60,90 +57,51 @@ public class Client {
             System.out.print(new String(received));
     }
 
-    public void data() {
-        send(makeCommand("TEST","".getBytes()));
-        openDataConnection();
-        int test = 0;
-        try {
-            test = dataInputStream.read();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        System.out.println(test);
-    }
-    private void openDataConnection() {
-        while(true){
-            try
-            {
-                dataConnection = new Socket(ipAddress, dataPort);
-                if(dataConnection != null)break;
-            }catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-        try {
-            this.dataInputStream = dataConnection.getInputStream();
-            this.dataOutputStream = dataConnection.getOutputStream();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-
-    private void closeDataConnection() {
-        try {
-            dataInputStream.close();
-            dataOutputStream.close();
-            dataConnection.close();
-            //dataSocket.close();
-
-            if(dataSocket != null) {
-                dataSocket.close();
-            }
-        } catch(IOException e) {
-            e.printStackTrace();
-        }
-    }
 
     public void quitConnection() {
         byte[] cmd = makeCommand("QUIT", "".getBytes());
         send(cmd);
     }
 
-    public void Put(String file) {
-        File f = new File(file);
+    public void Put(String file) throws Exception {
+        File f = new File(Paths.get(this.curDir, file).toString());
         if (!f.exists()) {
             System.out.println("File not found");
             return;
         }
 
-        FileInputStream fileInputStream = null;
-
-        try {
-            fileInputStream = new FileInputStream(f);
-
-        } catch (Exception e) {
-        }
-
+        FileInputStream fileInputStream = new FileInputStream(f);
         byte[] out = new byte[(int)f.length()];
-        try {
-            fileInputStream.read(out);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
+        fileInputStream.read(out);
         ByteBuffer bf = ByteBuffer.allocate(255 + (int)f.length());
         bf.put(Arrays.copyOf(f.getName().getBytes(), 255));
         bf.put(out);
+        send(makeCommand("PUT", bf.array()));
+        fileInputStream.close();
+        byte[] received = read();
 
-        byte[] cmd = makeCommand("PUT", bf.array());
+        Socket dataSocket = new Socket(ipAddress, dataPort);
+        DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
+        fileInputStream = new FileInputStream(f);
 
-        send(cmd);
+        System.out.print(f.getName() + " transferred\t/");
+        System.out.print(f.length()+ " bytes");
 
-        System.out.printf("%s transferred / %d bytes\n", f.getName(), f.length());
+        for (byte seqNo = 0; ; seqNo++) {
+            byte[] data = fileInputStream.readNBytes(DataPacket.maxDataSize);
+            System.out.print("#");
+            if (data.length == 0) break;
+            DataPacket chunk = new DataPacket(seqNo, (short)data.length, data);
+            chunk.writeBytes(dataOutputStream);
+        }
+
+        System.out.println("\tCompleted...");
+        dataSocket.close();
+        dataOutputStream.close();
+        fileInputStream.close();
     }
 
-    public void Get(String file) {
+    public void Get(String file) throws IOException {
         send(makeCommand("GET", file.getBytes()));
 
         byte[] received;
@@ -153,15 +111,6 @@ public class Client {
             e.printStackTrace();
             return;
         }
-    //TODO from here
-        System.out.printf("Received %s / %d bytes\n", file, received.length-255);
-        for (int i = 0; i < ((received.length-255)/1000)+1; i++) {
-            System.out.print('#');
-        }
-        System.out.println("\t Completed...");
-        //TODO to here
-
-        FileOutputStream fileOutputStream;
         File f = new File(file);
         if (!f.exists()) {
             try {
@@ -170,20 +119,26 @@ public class Client {
                 e.printStackTrace();
             }
         }
+        int len = Integer.parseInt(new String(received));
+        System.out.printf("Received %s / %d bytes\n", file, len);
+
+        Socket dataSocket = new Socket(ipAddress, dataPort);
+        DataInputStream dataInputStream = new DataInputStream(dataSocket.getInputStream());
+        FileOutputStream fileOutputStream = new FileOutputStream(f);
 
 
-        try {
-            fileOutputStream = new FileOutputStream(f);
-        } catch (FileNotFoundException e) {
-            // WTF?
-            return;
+        for (byte seqNo = 0; seqNo * DataPacket.maxDataSize < len; seqNo++) {
+            byte[] bytes = dataInputStream.readNBytes(DataPacket.maxChunkSize);
+            System.out.print("#");
+            DataPacket chunk = new DataPacket(bytes);
+            fileOutputStream.write(chunk.data);
         }
 
-        try {
-            fileOutputStream.write(Arrays.copyOfRange(received,255, received.length));
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        System.out.println("\t Completed...");
+        dataSocket.close();
+        dataInputStream.close();
+        fileOutputStream.close();
+
     }
 
     public void CD(String path) {
@@ -226,7 +181,7 @@ public class Client {
         String statusCode = new String(Arrays.copyOfRange(header, 4, 8)).trim();
         int dataLen = Integer.parseInt(new String(Arrays.copyOfRange(header, 8, 12)).trim());
 
-        //if(!statusCode.contentEquals("200")) return null;
+        if(!statusCode.contentEquals("200")) return null;
 
         byte[] buffer = new byte[dataLen];
         try {
@@ -267,230 +222,6 @@ public class Client {
         return result;
     }
 
-
-    //TODO: End my life
-    public void dataPut(String file) {
-        File f = new File(file);
-        if (!f.exists()) {
-            System.out.println("File not found");
-            return;
-        }
-        FileInputStream fileInputStream = null;
-
-        try {
-            fileInputStream = new FileInputStream(f);
-
-        } catch (Exception e) {
-        }
-
-        byte[] out = new byte[(int)f.length()];
-        try {
-            fileInputStream.read(out);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        ByteBuffer bf = ByteBuffer.allocate(255 + (int)f.length());
-        bf.put(Arrays.copyOf(f.getName().getBytes(), 255));
-        bf.put(out);
-
-        byte[] cmd = makeCommand("DPUT", bf.array());
-        send(cmd);
-        while(true){
-            openDataConnection();
-            if (dataConnection!=null)break;
-        }
-        byte[] received;
-        try {
-            received = read();
-        }catch(Exception e){
-            e.printStackTrace();
-            return;
-        }
-        if(received!=null){
-            try {
-                System.out.printf("%s transferred / %d bytes\n", f.getName(), f.length());
-                dataWriteToServer(out, 0, "0000", (int)f.length());
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }else{
-            System.out.println("Failed for unknown reason");
-            closeDataConnection();
-            return;
-        }
-
-    }
-
-    public void dataGet(String file) {
-        send(makeCommand("GET", file.getBytes()));
-
-        byte[] received;
-        try {
-            received = read();
-            while(true){
-                openDataConnection();
-                if (dataConnection!=null)break;
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-            return;
-        }
-        byte[] dataResp = null;
-        if(received.length>0) {
-            try {
-                //dataResp = new byte[received.length];
-                dataResp = new byte[(received.length+12)*((received.length/1000)+1)];
-                dataResp = dataRead();
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }else{
-            System.out.println("Failed – Such file does not exist!");
-            closeDataConnection();
-            return;
-        }
-        System.out.printf("Received %s / %d bytes\n", file, received.length);
-
-        FileOutputStream fileOutputStream;
-        File f = new File(file);
-        if (!f.exists()) {
-            try {
-                f.createNewFile();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-
-
-        try {
-            fileOutputStream = new FileOutputStream(f);
-        } catch (FileNotFoundException e) {
-            return;
-        }
-
-        try {
-            //TODO
-            fileOutputStream.write(Arrays.copyOfRange(dataResp,0, dataResp.length));
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        closeDataConnection();
-    }
-
-    private int dataSend(OutputStream os, byte[] buffer, byte[] SeqNo, byte[] CHKsum, byte[] Size) {
-        ByteBuffer bf = ByteBuffer.allocate(12+buffer.length);
-
-        bf.put(Arrays.copyOf(SeqNo, 4));
-        bf.put(Arrays.copyOf(CHKsum, 4));
-        bf.put(Arrays.copyOf(Size, 4));
-        bf.put(buffer);
-
-        try {
-            dataOutputStream.write(bf.array());
-            dataOutputStream.flush();
-        }
-        catch (IOException e) {
-            return -1;
-        }
-
-        return buffer.length;
-    }
-    private int dataWriteToServer(byte[] buffer, int SeqNo, String CHKsum, int Size) {
-        ByteBuffer SequenceNumber = ByteBuffer.allocate(4);
-        String SQN = Integer.toString(SeqNo);
-        SequenceNumber.put(Arrays.copyOf(SQN.getBytes(), 4));
-
-
-        ByteBuffer CheckSum = ByteBuffer.allocate(4);
-        CheckSum.put(Arrays.copyOf(CHKsum.getBytes(), 4));
-
-        ByteBuffer fileSize = ByteBuffer.allocate(4);
-        String FSIZE = Integer.toString(Size);
-        fileSize.put(Arrays.copyOf(FSIZE.getBytes(), 4));
-/*
-        byte[] CheckSum = new byte[4];
-        CheckSum = CHKsum.getBytes();
-
-        byte[] fileSize = new byte[4];
-        String fsize = Integer.toString(Size);
-        fileSize = fsize.getBytes();
-*/
-        int chunkNum =(Size/1000)+1;
-        int chunkcount = 0;
-        int iterativeRemainder = Size;
-
-        while(chunkNum > chunkcount){
-            if(iterativeRemainder > 1000) {
-                iterativeRemainder = iterativeRemainder - (chunkNum * 1000);
-                dataSend(dataOutputStream, Arrays.copyOfRange(buffer, chunkcount * 1000, (chunkcount + 1) * 1000), SequenceNumber.array(), CheckSum.array(), fileSize.array());
-            }
-            else dataSend(dataOutputStream, Arrays.copyOfRange(buffer, chunkcount * 1000, (chunkcount * 1000)+iterativeRemainder), SequenceNumber.array(), CheckSum.array(), fileSize.array());
-            chunkcount++;
-        }
-
-        while(chunkNum > chunkcount){
-            if(iterativeRemainder > 1012) {
-                iterativeRemainder = iterativeRemainder - (chunkNum * 1012);
-                System.out.print('#');
-            }
-            System.out.print('#');
-            chunkcount++;
-        }
-        System.out.println("\tCompleted...");
-        closeDataConnection();
-        return 0;
-    }
-    private byte[] dataRead() throws Exception {
-        byte[] header = new byte[12];
-        try {
-            dataInputStream.read(header, 0, 12);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
-        int SeqNo = Integer.parseInt(new String(Arrays.copyOfRange(header, 0, 4)).trim());
-        String CHKsum = new String(Arrays.copyOfRange(header, 4, 8)).trim();
-        int Size = Integer.parseInt(new String(Arrays.copyOfRange(header, 8, 12)).trim());
-
-        //if(!CHKsum.contentEquals("0000")) return null;
-
-
-        int chunkNum = (int)Math.ceil(Size/1000)+1;
-        int chunkcount = 0;
-        int iterativeRemainder = Size;
-        byte[] buffer = new byte[chunkNum*(12+Size)];
-
-        dataInputStream.read(buffer,0, Size);
-
-        while(chunkNum > chunkcount){
-            if(iterativeRemainder > 1012) {
-                iterativeRemainder = iterativeRemainder - (chunkNum * 1012);
-                System.out.print('#');
-            }
-            System.out.print('#');
-            chunkcount++;
-        }
-        System.out.println("\tCompleted...");
-        /*
-        try {
-            while(chunkNum > chunkcount){
-                if(iterativeRemainder > 1012) {
-                    iterativeRemainder = iterativeRemainder - (chunkNum * 1012);
-                    dataInputStream.read(buffer, chunkcount*1000+12, 1012);
-                    System.out.print('#');
-                }
-                dataInputStream.read(buffer, ((chunkcount*1000)+12), ((chunkcount*1000)+12)+Size);
-                System.out.print('#');
-                chunkcount++;
-            }
-            System.out.println("\tCompleted...");
-        } catch (IOException e){
-            e.printStackTrace();
-        }
-    */
-        return buffer;
-    }
 
 
 }
