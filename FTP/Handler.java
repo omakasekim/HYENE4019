@@ -1,5 +1,6 @@
 package FTP;
 
+import javax.xml.crypto.Data;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -7,7 +8,6 @@ import java.nio.ByteBuffer;
 import java.nio.file.NotDirectoryException;
 import java.nio.file.Paths;
 import java.util.Arrays;
-
 
 
 public class Handler implements Runnable {
@@ -18,7 +18,6 @@ public class Handler implements Runnable {
     private String ipAddress;
     private int dataPort;
     private ServerSocket serverSocket;
-
 
 
 
@@ -38,7 +37,6 @@ public class Handler implements Runnable {
             e.printStackTrace();
         }
     }
-
     @Override
     public void run() {
         while(true) {
@@ -47,7 +45,6 @@ public class Handler implements Runnable {
             }
         }
     }
-
     private int write(OutputStream os, byte[] buffer, String statusCode, String type) {
         ByteBuffer bf = ByteBuffer.allocate(12+buffer.length);
 
@@ -66,19 +63,16 @@ public class Handler implements Runnable {
 
         return buffer.length;
     }
-
     private int writeToClient(byte[] buffer, String statusCode, String type) {
         write(outputStream, buffer, statusCode, type);
 
         return 0;
     }
-
     private int writeToClient(String buffer, String statusCode, String type) {
         write(outputStream, buffer.getBytes(), statusCode, type);
 
         return 0;
     }
-
     private int readToBuf(byte[] dst) {
         int result;
 
@@ -91,7 +85,6 @@ public class Handler implements Runnable {
 
         return result;
     }
-
     private int parseCmd() {
         byte[] header = new byte[8];
         try {
@@ -122,7 +115,8 @@ public class Handler implements Runnable {
 
         switch (cmd) {
             case "PUT":
-                PutWrapper(dataBuffer);
+                //PutWrapper(dataBuffer);
+                handlePutWrapper(dataBuffer);
                 break;
             case "LIST":
                 processList(dataBuffer);
@@ -141,7 +135,6 @@ public class Handler implements Runnable {
 
         return 0;
     }
-
     private void processList(byte[] buffer) {
         String arg = new String(Arrays.copyOfRange(buffer, 0, 255)).trim();
 
@@ -174,7 +167,6 @@ public class Handler implements Runnable {
         System.out.println("Response : 200 Comprising "+ filecount +" entries");
         writeToClient(result, "200", "LST");
     }
-
     private String getFileList(String path) throws FileNotFoundException, NotDirectoryException {
         File dir = new File(path);
         File[] files = dir.listFiles();
@@ -199,6 +191,8 @@ public class Handler implements Runnable {
 
         return out;
     }
+
+
 
     private void processCD(byte[] buffer) {
         String path = new String(buffer).trim();
@@ -236,7 +230,6 @@ public class Handler implements Runnable {
         System.out.println("Request : CD " + curDir);
         System.out.println("Response : 200 Moved to "+ curDir);
     }
-
     private void PutWrapper(byte[] buffer) {
         try {
             processPutFile(buffer);
@@ -251,7 +244,6 @@ public class Handler implements Runnable {
             e.printStackTrace();
         }
     }
-
     private void processPutFile(byte[] buffer) throws IOException {
         String filename = new String(Arrays.copyOfRange(buffer, 0, 255)).trim();
         File f = new File(Paths.get(this.curDir, filename).toString());
@@ -283,7 +275,6 @@ public class Handler implements Runnable {
         fileOutputStream.close();
 
     }
-
     private void processGetFile(byte[] buffer){
         String filename = new String(Arrays.copyOfRange(buffer, 0, 255)).trim();
 
@@ -315,6 +306,76 @@ public class Handler implements Runnable {
     }catch (Exception e){
         e.printStackTrace();
     }
+
+    }
+
+    private void handlePutWrapper(byte[] buffer) {
+        try {
+            handlePUT(buffer);
+        }catch(IOException e){
+            e.printStackTrace();
+        }
+    }
+    private void handlePUT(byte[] buffer) throws IOException {
+        String filename = new String(Arrays.copyOfRange(buffer, 0, 255)).trim();
+        File f = new File(Paths.get(this.curDir, filename).toString());
+        if (!f.exists()) {
+            try {
+                f.createNewFile();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        writeToClient("Ready to receive", "200", "PUT");
+
+        int filelen = buffer.length-255;
+        int chunks = (filelen + DataPacket.maxDataSize-1)/DataPacket.maxDataSize;
+        Socket dataSocket = serverSocket.accept();
+        DataInputStream dataInputStream = new DataInputStream(dataSocket.getInputStream());
+        DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
+        FileOutputStream fileOutputStream = new FileOutputStream(f);
+
+        DataPacket[] window = new DataPacket[DataPacket.maxWinSize];
+        int SeqBase = 0;
+        int inWindow = 0;
+        int firstSeqNo = 0;
+
+
+        while(chunks > 0) {
+            byte[] header = dataInputStream.readNBytes(DataPacket.headerSize);
+            DataPacket chunk = new DataPacket(header);
+            int localSeqNo = chunk.getSeqNo();
+            int logicalSeqNo = localSeqNo-firstSeqNo+((localSeqNo-firstSeqNo<-DataPacket.maxWinSize)?(DataPacket.maxSeqNo+1):0);
+
+            if(logicalSeqNo < 0){
+                dataOutputStream.writeBytes(Integer.toString(localSeqNo));
+            } else if (logicalSeqNo < DataPacket.maxWinSize) {
+                chunk.setPayload(dataInputStream.readNBytes(chunk.getSize()));
+                if(chunk.calcCHK()) continue;
+                int idx = (SeqBase+logicalSeqNo)%DataPacket.maxWinSize;
+                window[idx] = chunk;
+                inWindow++;
+                dataOutputStream.writeBytes(Integer.toString(localSeqNo));
+                while (window[SeqBase] != null && inWindow > 0) {
+                    System.out.print(firstSeqNo + " ");
+                    fileOutputStream.write(window[SeqBase].data);
+                    window[SeqBase] = null;
+                    firstSeqNo = (byte)((firstSeqNo + 1)%(DataPacket.maxSeqNo + 1));
+                    SeqBase = (SeqBase+1)%DataPacket.maxWinSize;
+                    inWindow--;
+                    chunks--;
+                }
+            }
+        }
+
+        System.out.println("Request : PUT " + f.getName());
+        System.out.println("Request : "+filelen);
+        System.out.println("Response : 200 Ready to receive");
+
+        System.out.println("\t Completed");
+        dataSocket.close();
+        dataInputStream.close();
+        fileOutputStream.close();
 
     }
 
