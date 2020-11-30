@@ -18,6 +18,11 @@ public class Handler implements Runnable {
     private String ipAddress;
     private int dataPort;
     private ServerSocket serverSocket;
+    private boolean DROP = false;
+    private boolean TIMEOUT = false;
+    private boolean BITERROR = false;
+    private int problem;
+
 
 
 
@@ -114,15 +119,25 @@ public class Handler implements Runnable {
         }
 
         switch (cmd) {
+            case "DROP":
+                setDrop(dataBuffer);
+                break;
+            case "BITERROR":
+                setBitError(dataBuffer);
+                break;
+            case "TIMEOUT":
+                setTimeout(dataBuffer);
+                break;
             case "PUT":
                 //PutWrapper(dataBuffer);
-                handlePutWrapper(dataBuffer);
+                //handlePutWrapper(dataBuffer);
+                experimentalPutWrapper(dataBuffer);
                 break;
             case "LIST":
                 processList(dataBuffer);
                 break;
             case "GET":
-                processGetFile(dataBuffer);
+                GetWrapper(dataBuffer);
                 break;
             case "CD":
                 processCD(dataBuffer);
@@ -191,6 +206,57 @@ public class Handler implements Runnable {
 
         return out;
     }
+    private void setDrop(byte[] buffer) {
+        DROP = true;
+        problem = Integer.parseInt(new String(buffer));
+    }
+    private void setBitError(byte[] buffer) {
+        BITERROR = true;
+        problem = Integer.parseInt(new String(buffer));
+
+    }
+    private void setTimeout(byte[] buffer) {
+        TIMEOUT = true;
+        problem = Integer.parseInt(new String(buffer));
+    }
+
+
+    //TODO
+    private void experimentalPutWrapper(byte[] buffer){
+        try {
+            experimentalPut(buffer);
+        }catch(IOException e){
+            e.printStackTrace();
+        }
+    }
+    private void experimentalPut(byte[] buffer) throws IOException {
+        String filename = new String(Arrays.copyOfRange(buffer, 0, 255)).trim();
+        File f = new File(Paths.get(this.curDir, filename).toString());
+        if (!f.exists()) {
+            try {
+                f.createNewFile();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        writeToClient("Ready to receive", "200", "PUT");
+        Socket dataSocket = serverSocket.accept();
+        DataInputStream dataInputStream = new DataInputStream(dataSocket.getInputStream());
+        FileOutputStream fileOutputStream = new FileOutputStream(f);
+        BufferedOutputStream bufferedOutputStream = new BufferedOutputStream(fileOutputStream);
+        DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
+        int filelen = buffer.length-255;
+        try {
+            Receiver receiver = new Receiver(fileOutputStream, bufferedOutputStream, dataInputStream, dataOutputStream, filelen);
+            if(receiver!=null) receiver.startUDPConnection();
+        } catch (Exception e){
+            e.printStackTrace();
+        }
+        System.out.println("Request : PUT " + f.getName());
+        System.out.println("Request : "+filelen);
+        System.out.println("Response : 200 Ready to receive");
+    }
+
 
 
 
@@ -345,7 +411,7 @@ public class Handler implements Runnable {
             byte[] header = dataInputStream.readNBytes(DataPacket.headerSize);
             DataPacket chunk = new DataPacket(header);
             int localSeqNo = chunk.getSeqNo();
-            int logicalSeqNo = localSeqNo-firstSeqNo+((localSeqNo-firstSeqNo<-DataPacket.maxWinSize)?(DataPacket.maxSeqNo+1):0);
+            int logicalSeqNo = localSeqNo-firstSeqNo+((localSeqNo-firstSeqNo<-DataPacket.maxWinSize)?DataPacket.maxSeqNo:0);
 
             if(logicalSeqNo < 0){
                 dataOutputStream.writeBytes(Integer.toString(localSeqNo));
@@ -360,7 +426,7 @@ public class Handler implements Runnable {
                     System.out.print(firstSeqNo + " ");
                     fileOutputStream.write(window[SeqBase].data);
                     window[SeqBase] = null;
-                    firstSeqNo = (byte)((firstSeqNo + 1)%(DataPacket.maxSeqNo + 1));
+                    firstSeqNo = (byte)((firstSeqNo + 1)%(DataPacket.maxSeqNo));
                     SeqBase = (SeqBase+1)%DataPacket.maxWinSize;
                     inWindow--;
                     chunks--;
@@ -377,6 +443,11 @@ public class Handler implements Runnable {
         dataInputStream.close();
         fileOutputStream.close();
 
+        BITERROR = false;
+        TIMEOUT = false;
+        DROP = false;
+        problem = 0;
     }
+
 
 }
