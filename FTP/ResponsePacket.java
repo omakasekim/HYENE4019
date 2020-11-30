@@ -17,7 +17,7 @@ public class ResponsePacket implements Comparable<ResponsePacket> {
         this.chkSum = 0x0000;
     }
 
-    public ResponsePacket(byte seqNo, byte chkSum) {
+    public ResponsePacket(byte seqNo, short chkSum) {
         this.seqNo = seqNo;
         this.chkSum = 0x0000;
     }
@@ -38,6 +38,7 @@ public class ResponsePacket implements Comparable<ResponsePacket> {
     public boolean calcCHK() {
         return chkSum != 0x000;
     }
+    public short getChkSum() { return chkSum; }
 
     @Override
     public int compareTo(ResponsePacket comparePacket) {
