@@ -1,8 +1,10 @@
 package FTP;
 
+import javax.xml.crypto.Data;
 import java.io.*;
 import java.net.*;
 import java.nio.*;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 
@@ -17,6 +19,11 @@ public class Client {
     private OutputStream outputStream;
     private String curDir;
 
+    //Selective Repeat
+    protected  final int senderTimeout = 1;
+    protected ArrayList<Integer> srDropList;
+    protected ArrayList<Integer> srTimeoutList;
+    protected ArrayList<Integer> srBitErrList;
 
 
     public Client() {
@@ -56,7 +63,6 @@ public class Client {
         else
             System.out.print(new String(received));
     }
-
 
     public void quitConnection() {
         byte[] cmd = makeCommand("QUIT", "".getBytes());
@@ -99,6 +105,98 @@ public class Client {
         dataSocket.close();
         dataOutputStream.close();
         fileInputStream.close();
+    }
+
+    public void handlePut(String file) throws Exception {
+        File f = new File(Paths.get(this.curDir, file).toString());
+        if (!f.exists()) {
+            System.out.println("File not found");
+            return;
+        }
+
+        FileInputStream fileInputStream = new FileInputStream(f);
+        byte[] out = new byte[(int)f.length()];
+        fileInputStream.read(out);
+        ByteBuffer bf = ByteBuffer.allocate(255 + (int)f.length());
+        bf.put(Arrays.copyOf(f.getName().getBytes(), 255));
+        bf.put(out);
+        send(makeCommand("PUT", bf.array()));
+        fileInputStream.close();
+        byte[] received = read();
+
+        Socket dataSocket = new Socket(ipAddress, dataPort);
+        BufferedReader dataInputStream = new BufferedReader(new InputStreamReader(dataSocket.getInputStream()));
+        DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
+        fileInputStream = new FileInputStream(f);
+        DataPacket[] window = new DataPacket[DataPacket.maxWinSize];
+        Timer[] timers = new Timer[DataPacket.maxWinSize];
+        int chunks = (int)(f.length() + DataPacket.maxDataSize -1) / DataPacket.maxDataSize;
+        int seqBase = 0;
+        int inWindow = 0;
+        byte baseSeqNo = 0;
+        byte nextInLine = 0;
+
+        try {
+            while(chunks > 0) {
+                Boolean sw = false;
+                while(inWindow < DataPacket.maxWinSize && inWindow < chunks) {
+                    if(!sw) {
+                        System.out.print("Transmitted : ");
+                        sw = true;
+                    }
+                    int idx = (seqBase + inWindow) % DataPacket.maxWinSize;
+                    byte[] data = fileInputStream.readNBytes(DataPacket.maxDataSize);
+                    window[idx] = new DataPacket(nextInLine, data);
+                    if(nextInLine != 2) {
+                        synchronized (dataOutputStream) {
+                            window[idx].writeBytes(dataOutputStream);
+                        }
+                    }
+                    System.out.println(nextInLine + " ");
+                    timers[idx] = new Timer();
+                    timers[idx].scheduleAtFixedRate(
+                            new TimerTask() {
+                                @Override
+                                public void run() {
+                                    try {
+                                        synchronized (dataOutputStream) {
+                                            System.out.println(window[idx].getSeqNo() + "Timed out, retransmitting");
+                                            window[idx].writeBytes(dataOutputStream);
+                                        }
+                                    } catch (IOException e) {
+                                        e.printStackTrace();
+                                    }
+                                }
+                            },
+                            senderTimeout * 1000, senderTimeout * 1000
+                    );
+                    inWindow++;
+                    nextInLine = (byte) ((nextInLine + 1)*(DataPacket.maxSeqNo + 1));
+                }
+                if(sw) System.out.println();
+                int localAcked = Integer.parseInt(dataInputStream.readLine());
+                System.out.println(localAcked + " Acked");
+                int logicalAcked=localAcked-baseSeqNo+((localAcked-baseSeqNo<-DataPacket.maxWinSize)?(DataPacket.maxSeqNo+1):0);
+                if(0 <= logicalAcked && logicalAcked < inWindow) {
+                    int idx = (seqBase + logicalAcked) % DataPacket.maxWinSize;
+                    window[idx] = null;
+                    timers[idx].cancel();
+                    timers[idx] = null;
+                    while(window[seqBase] == null && inWindow > 0) {
+                        baseSeqNo = (byte) ((baseSeqNo + 1) % (DataPacket.maxSeqNo + 1));
+                        seqBase = (seqBase+1)%DataPacket.maxWinSize;
+                        inWindow--;
+                        chunks--;
+                    }
+                }
+            }
+        } finally {
+            fileInputStream.close();
+            dataOutputStream.close();
+            dataInputStream.close();
+            dataSocket.close();
+        }
+        return;
     }
 
     public void Get(String file) throws IOException {
