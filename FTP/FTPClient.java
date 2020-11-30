@@ -56,10 +56,6 @@ public class FTPClient {
             }
             else if(cmd.contains("CD") && cmd.length() > 2) {
                 cmds = cmd.split(" ");
-            }else if(cmd.contains("TEST") && cmd.length() > 4) {
-                cmds = cmd.split(" ");
-            }else if(cmd.contains("DPUT") && cmd.length() > 4) {
-                cmds = cmd.split(" ");
             }
 
 
@@ -73,15 +69,16 @@ public class FTPClient {
                     ftpClient.quitConnection();
                     break loop;
                 case "LIST":
-                    if(cmds[1] == null ||cmds[1] == " ")
+                    if(cmds[1] == null || cmds[1].equals(" "))
                         cmds[1] = ".";
                     ftpClient.List(cmds[1]);
                     break;
                 case "PUT":
-                    ftpClient.Put(cmds[1]);
+                    //Todo
+                    ftpClient.handlePut(cmds[1]);
                     break;
                 case "CD":
-                    if(cmds[1] == null || cmds[1] == " ")
+                    if(cmds[1] == null || cmds[1].equals(" "))
                         ftpClient.CD(".");
                     else ftpClient.CD(cmds[1]);
                     break;
