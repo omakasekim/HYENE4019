@@ -7,6 +7,7 @@ import java.nio.*;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class Client {
 
@@ -21,9 +22,14 @@ public class Client {
 
     //Selective Repeat
     protected  final int senderTimeout = 1;
-    protected ArrayList<Integer> srDropList;
-    protected ArrayList<Integer> srTimeoutList;
-    protected ArrayList<Integer> srBitErrList;
+    protected ArrayList<Integer> Dropped = new ArrayList<>();
+    protected ArrayList<Integer> TimedOut = new ArrayList<>();
+    protected ArrayList<Integer> BitError = new ArrayList<>();
+    private boolean DROP = false;
+    private boolean TIMEOUT = false;
+    private boolean BITERROR = false;
+    private int problem;
+
 
 
     public Client() {
@@ -35,16 +41,20 @@ public class Client {
         this.serverPort = serverPort;
         this.dataPort = dataPort;
         this.curDir =  System.getProperty("user.dir");
+        Dropped = new ArrayList<>(15);
+
 
         try {
             socket = new Socket(this.ipAddress, this.serverPort);
             inputStream = socket.getInputStream();
             outputStream = socket.getOutputStream();
+
         }
         catch (Exception e) {
             e.printStackTrace();
             System.exit(-1);
         }
+
     }
 
     public void List(String path) {
@@ -107,6 +117,31 @@ public class Client {
         fileInputStream.close();
     }
 
+    public void dropRequest(String packet) {
+        String packetNum = (packet.substring(1));
+        byte[] packetNo = packetNum.getBytes();
+        send(makeCommand("DROP", packetNo));
+        this.DROP = true;
+        this.problem = Integer.parseInt(packetNum);
+
+    }
+    public void bitErrorRequest(String packet){
+        String packetNum = (packet.substring(1));
+        byte[] packetNo = packetNum.getBytes();
+        send(makeCommand("BITERROR", packetNo));
+        this.BITERROR = true;
+        this.problem = Integer.parseInt(packetNum);
+
+    }
+    public void timeoutRequest(String packet){
+        String packetNum = (packet.substring(1));
+        byte[] packetNo = packetNum.getBytes();
+        send(makeCommand("TIMEOUT", packetNo));
+        this.TIMEOUT = true;
+        this.problem = Integer.parseInt(packetNum);
+
+    }
+    //TODO
     public void handlePut(String file) throws Exception {
         File f = new File(Paths.get(this.curDir, file).toString());
         if (!f.exists()) {
@@ -128,6 +163,7 @@ public class Client {
         BufferedReader dataInputStream = new BufferedReader(new InputStreamReader(dataSocket.getInputStream()));
         DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
         fileInputStream = new FileInputStream(f);
+
         DataPacket[] window = new DataPacket[DataPacket.maxWinSize];
         Timer[] timers = new Timer[DataPacket.maxWinSize];
         int chunks = (int)(f.length() + DataPacket.maxDataSize -1) / DataPacket.maxDataSize;
@@ -138,21 +174,15 @@ public class Client {
 
         try {
             while(chunks > 0) {
-                Boolean sw = false;
+                Boolean EOT = false;
                 while(inWindow < DataPacket.maxWinSize && inWindow < chunks) {
-                    if(!sw) {
-                        System.out.print("Transmitted : ");
-                        sw = true;
+                    if(!EOT) {
+                        System.out.print(f.getName() + " Transferred \t/" + f.length() + " bytes");
+                        EOT = true;
                     }
                     int idx = (seqBase + inWindow) % DataPacket.maxWinSize;
                     byte[] data = fileInputStream.readNBytes(DataPacket.maxDataSize);
                     window[idx] = new DataPacket(nextInLine, data);
-                    if(nextInLine != 2) {
-                        synchronized (dataOutputStream) {
-                            window[idx].writeBytes(dataOutputStream);
-                        }
-                    }
-                    System.out.println(nextInLine + " ");
                     timers[idx] = new Timer();
                     timers[idx].scheduleAtFixedRate(
                             new TimerTask() {
@@ -160,7 +190,7 @@ public class Client {
                                 public void run() {
                                     try {
                                         synchronized (dataOutputStream) {
-                                            System.out.println(window[idx].getSeqNo() + "Timed out, retransmitting");
+                                            System.out.print(window[idx].getSeqNo() + " Timed out & retransmitted ");
                                             window[idx].writeBytes(dataOutputStream);
                                         }
                                     } catch (IOException e) {
@@ -168,14 +198,17 @@ public class Client {
                                     }
                                 }
                             },
-                            senderTimeout * 1000, senderTimeout * 1000
+                            senderTimeout*1000, senderTimeout*1000
                     );
                     inWindow++;
-                    nextInLine = (byte) ((nextInLine + 1)*(DataPacket.maxSeqNo + 1));
+                    synchronized (dataOutputStream) { window[idx].writeBytes(dataOutputStream); }
+                    nextInLine=(byte)((nextInLine+1)%(DataPacket.maxSeqNo));
                 }
-                if(sw) System.out.println();
+                if(EOT)System.out.println();
                 int localAcked = Integer.parseInt(dataInputStream.readLine());
-                System.out.println(localAcked + " Acked");
+                if(BITERROR == false && TIMEOUT == false && DROP == false) {
+                    System.out.print(localAcked + " Acked, ");
+                }
                 int logicalAcked=localAcked-baseSeqNo+((localAcked-baseSeqNo<-DataPacket.maxWinSize)?(DataPacket.maxSeqNo+1):0);
                 if(0 <= logicalAcked && logicalAcked < inWindow) {
                     int idx = (seqBase + logicalAcked) % DataPacket.maxWinSize;
@@ -183,7 +216,7 @@ public class Client {
                     timers[idx].cancel();
                     timers[idx] = null;
                     while(window[seqBase] == null && inWindow > 0) {
-                        baseSeqNo = (byte) ((baseSeqNo + 1) % (DataPacket.maxSeqNo + 1));
+                        baseSeqNo = (byte) ((baseSeqNo + 1) % (DataPacket.maxSeqNo));
                         seqBase = (seqBase+1)%DataPacket.maxWinSize;
                         inWindow--;
                         chunks--;
@@ -191,12 +224,52 @@ public class Client {
                 }
             }
         } finally {
+            if(BITERROR == true && TIMEOUT == true && DROP == true) {
+                System.out.print("R"+problem + " Timed out & retransmitted ");
+
+            }
             fileInputStream.close();
             dataOutputStream.close();
             dataInputStream.close();
             dataSocket.close();
         }
+        BITERROR = false;
+        TIMEOUT = false;
+        DROP = false;
+        problem = 0;
         return;
+    }
+    //TODO
+    public void experimentalPut(String file) throws Exception {
+        File f = new File(Paths.get(this.curDir, file).toString());
+        if (!f.exists()) {
+            System.out.println("File not found");
+            return;
+        }
+
+        FileInputStream fileInputStream = new FileInputStream(f);
+        byte[] out = new byte[(int)f.length()];
+        fileInputStream.read(out);
+        ByteBuffer bf = ByteBuffer.allocate(255 + (int)f.length());
+        bf.put(Arrays.copyOf(f.getName().getBytes(), 255));
+        bf.put(out);
+        send(makeCommand("PUT", bf.array()));
+        fileInputStream.close();
+        byte[] received = read();
+
+        fileInputStream = null;
+        fileInputStream = new FileInputStream(f);
+
+        Socket dataSocket = new Socket(ipAddress, dataPort);
+        fileInputStream = new FileInputStream(f);
+
+        BufferedInputStream bufferedInputStream = new BufferedInputStream(fileInputStream);
+        DataInputStream dataInputStream = new DataInputStream(dataSocket.getInputStream());
+        DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
+
+
+        RDTSender sender = new SelectiveRepeatSender(fileInputStream, bufferedInputStream, dataInputStream, dataOutputStream);
+        if(sender != null) sender.start();
     }
 
     public void Get(String file) throws IOException {
