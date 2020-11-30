@@ -19,9 +19,19 @@ public class FTPClient {
 
         loop:
         while(true) {
-            String cmd = scanner.nextLine();
+            String cmd = null;
+            cmd = scanner.nextLine();
             String[] cmds = new String[2];
 
+            if(cmd.contains("DROP")) {
+                cmds = cmd.split(" ");
+            }
+            if(cmd.contains("TIMEOUT")) {
+                cmds = cmd.split(" ");
+            }
+            if(cmd.contains("BITERROR")) {
+                cmds = cmd.split(" ");
+            }
             if(cmd.contentEquals("QUIT")) {
                 cmds[0] = cmd;
                 cmds[1] = null;
@@ -60,6 +70,15 @@ public class FTPClient {
 
 
             switch (cmds[0]) {
+                case "DROP":
+                    ftpClient.dropRequest(cmds[1]);
+                    break;
+                case "BITERROR":
+                    ftpClient.bitErrorRequest(cmds[1]);
+                    break;
+                case "TIMEOUT":
+                    ftpClient.timeoutRequest(cmds[1]);
+                    break;
                 case "GET":
                     if(cmds[1] == null)
                         cmds[1] = ".";
@@ -74,8 +93,10 @@ public class FTPClient {
                     ftpClient.List(cmds[1]);
                     break;
                 case "PUT":
-                    //Todo
-                    ftpClient.handlePut(cmds[1]);
+                    //TODO
+                    //ftpClient.Put(cmds[1]);
+                    //ftpClient.handlePut(cmds[1]);
+                    ftpClient.experimentalPut(cmds[1]);
                     break;
                 case "CD":
                     if(cmds[1] == null || cmds[1].equals(" "))
