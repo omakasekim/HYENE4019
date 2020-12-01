@@ -94,9 +94,8 @@ public class FTPClient {
                     break;
                 case "PUT":
                     //TODO
-                    //ftpClient.Put(cmds[1]);
-                    //ftpClient.handlePut(cmds[1]);
-                    ftpClient.experimentalPut(cmds[1]);
+                    ftpClient.Put(cmds[1]);
+                    //ftpClient.experimentalPut(cmds[1]);
                     break;
                 case "CD":
                     if(cmds[1] == null || cmds[1].equals(" "))
@@ -110,4 +109,3 @@ public class FTPClient {
     }
 
 }
-
