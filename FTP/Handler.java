@@ -129,9 +129,8 @@ public class Handler implements Runnable {
                 setTimeout(dataBuffer);
                 break;
             case "PUT":
-                //PutWrapper(dataBuffer);
-                //handlePutWrapper(dataBuffer);
-                experimentalPutWrapper(dataBuffer);
+                PutWrapper(dataBuffer);
+                //experimentalPutWrapper(dataBuffer);
                 break;
             case "LIST":
                 processList(dataBuffer);
@@ -352,101 +351,27 @@ public class Handler implements Runnable {
         writeToClient(String.valueOf(f.length()), "200", "GET");
 
 
-    try {
-        Socket dataSocket = serverSocket.accept();
-        DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
-        FileInputStream fileInputStream = new FileInputStream(f);
-
-        for (byte seqNo = 0; ; seqNo++) {
-            byte[] data = fileInputStream.readNBytes(DataPacket.maxDataSize);
-            if (data.length == 0) break;
-            DataPacket chunk = new DataPacket(seqNo,(short)data.length, data);
-            chunk.writeBytes(dataOutputStream);
-        }
-        System.out.println("Request : GET " + f.getName());
-        System.out.println("Response : 200 Containing " + f.length() + " bytes in total");
-        dataSocket.close();
-        dataOutputStream.close();
-        fileInputStream.close();
-
-    }catch (Exception e){
-        e.printStackTrace();
-    }
-
-    }
-
-    private void handlePutWrapper(byte[] buffer) {
         try {
-            handlePUT(buffer);
-        }catch(IOException e){
+            Socket dataSocket = serverSocket.accept();
+            DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
+            FileInputStream fileInputStream = new FileInputStream(f);
+
+            for (byte seqNo = 0; ; seqNo++) {
+                byte[] data = fileInputStream.readNBytes(DataPacket.maxDataSize);
+                if (data.length == 0) break;
+                DataPacket chunk = new DataPacket(seqNo,(short)data.length, data);
+                chunk.writeBytes(dataOutputStream);
+            }
+            System.out.println("Request : GET " + f.getName());
+            System.out.println("Response : 200 Containing " + f.length() + " bytes in total");
+            dataSocket.close();
+            dataOutputStream.close();
+            fileInputStream.close();
+
+        }catch (Exception e){
             e.printStackTrace();
         }
-    }
-    private void handlePUT(byte[] buffer) throws IOException {
-        String filename = new String(Arrays.copyOfRange(buffer, 0, 255)).trim();
-        File f = new File(Paths.get(this.curDir, filename).toString());
-        if (!f.exists()) {
-            try {
-                f.createNewFile();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-        writeToClient("Ready to receive", "200", "PUT");
 
-        int filelen = buffer.length-255;
-        int chunks = (filelen + DataPacket.maxDataSize-1)/DataPacket.maxDataSize;
-        Socket dataSocket = serverSocket.accept();
-        DataInputStream dataInputStream = new DataInputStream(dataSocket.getInputStream());
-        DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
-        FileOutputStream fileOutputStream = new FileOutputStream(f);
-
-        DataPacket[] window = new DataPacket[DataPacket.maxWinSize];
-        int SeqBase = 0;
-        int inWindow = 0;
-        int firstSeqNo = 0;
-
-
-        while(chunks > 0) {
-            byte[] header = dataInputStream.readNBytes(DataPacket.headerSize);
-            DataPacket chunk = new DataPacket(header);
-            int localSeqNo = chunk.getSeqNo();
-            int logicalSeqNo = localSeqNo-firstSeqNo+((localSeqNo-firstSeqNo<-DataPacket.maxWinSize)?DataPacket.maxSeqNo:0);
-
-            if(logicalSeqNo < 0){
-                dataOutputStream.writeBytes(Integer.toString(localSeqNo));
-            } else if (logicalSeqNo < DataPacket.maxWinSize) {
-                chunk.setPayload(dataInputStream.readNBytes(chunk.getSize()));
-                if(chunk.calcCHK()) continue;
-                int idx = (SeqBase+logicalSeqNo)%DataPacket.maxWinSize;
-                window[idx] = chunk;
-                inWindow++;
-                dataOutputStream.writeBytes(Integer.toString(localSeqNo));
-                while (window[SeqBase] != null && inWindow > 0) {
-                    System.out.print(firstSeqNo + " ");
-                    fileOutputStream.write(window[SeqBase].data);
-                    window[SeqBase] = null;
-                    firstSeqNo = (byte)((firstSeqNo + 1)%(DataPacket.maxSeqNo));
-                    SeqBase = (SeqBase+1)%DataPacket.maxWinSize;
-                    inWindow--;
-                    chunks--;
-                }
-            }
-        }
-
-        System.out.println("Request : PUT " + f.getName());
-        System.out.println("Request : "+filelen);
-        System.out.println("Response : 200 Ready to receive");
-
-        System.out.println("\t Completed");
-        dataSocket.close();
-        dataInputStream.close();
-        fileOutputStream.close();
-
-        BITERROR = false;
-        TIMEOUT = false;
-        DROP = false;
-        problem = 0;
     }
 
 
